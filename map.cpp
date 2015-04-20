@@ -14,6 +14,85 @@ Map_tile::~Map_tile()
 {
 }
 
+std::string Map_tile::save_data()
+{
+  std::stringstream ret;
+  ret << ter << " ";
+  ret << wood << " ";
+
+  ret << crops.size() << " ";
+  for (int i = 0; i < crops.size(); i++) {
+    ret << int(crops[i]) << " ";
+  }
+
+  ret << minerals.size() << " ";
+  for (int i = 0; i < minerals.size(); i++) {
+    ret << int(minerals[i].type) << " " << minerals[i].amount << " ";
+  }
+
+  ret << animals.size() << " ";
+  for (int i = 0; i < animals.size(); i++) {
+    ret << int(animals[i].type) << " " << animals[i].amount << " ";
+  }
+
+  return ret.str();
+}
+
+bool Map_tile::load_data(std::istream& data)
+{
+  int tmpter;
+  data >> tmpter;
+  if (tmpter <= 0 || tmpter >= TER_MAX) {
+    debugmsg("Map_tile loaded Terrain_type %d (range is 1 to %d).",
+             tmpter, TER_MAX - 1);
+    return false;
+  }
+  ter = Terrain_type(tmpter);
+
+  data >> wood;
+
+  int num_crops;
+  data >> num_crops;
+  for (int i = 0; i < num_crops; i++) {
+    int tmpcrop;
+    data >> tmpcrop;
+    if (tmpcrop <= 0 || tmpcrop >= CROP_MAX) {
+      debugmsg("Map_tile loaded crop %d (range is 1 to %d).",
+               tmpcrop, CROP_MAX - 1);
+      return false;
+    }
+    crops.push_back( Crop(tmpcrop) );
+  }
+
+  int num_minerals;
+  data >> num_minerals;
+  for (int i = 0; i < num_minerals; i++) {
+    int tmpmineral, tmpnum;
+    data >> tmpmineral >> tmpnum;
+    if (tmpmineral <= 0 || tmpmineral >= MINERAL_MAX) {
+      debugmsg("Map_tile loaded mineral %d (range is 1 to %d).",
+               tmpmineral, MINERAL_MAX - 1);
+      return false;
+    }
+    minerals.push_back( Mineral_amount( Mineral(tmpmineral), tmpnum ) );
+  }
+
+  int num_animals;
+  data >> num_animals;
+  for (int i = 0; i < num_animals; i++) {
+    int tmpanimal, tmpnum;
+    data >> tmpanimal >> tmpnum;
+    if (tmpanimal <= 0 || tmpanimal >= ANIMAL_MAX) {
+      debugmsg("Map_tile loaded animal %d (range is 1 to %d).",
+               tmpanimal, ANIMAL_MAX - 1);
+      return false;
+    }
+    animals.push_back( Animal_amount( Animal(tmpanimal), tmpnum ) );
+  }
+
+  return true;
+}
+
 Terrain_datum* Map_tile::get_terrain_datum()
 {
   return Terrain_data[ter];
@@ -57,7 +136,7 @@ std::string Map_tile::get_info()
 std::string Map_tile::get_crop_info()
 {
   if (crops.empty()) {
-    return std::string();
+    return "None";
   }
   std::stringstream ret;
   for (int i = 0; i < crops.size(); i++) {
@@ -69,9 +148,199 @@ std::string Map_tile::get_crop_info()
   return ret.str();
 }
 
+std::string Map_tile::get_animals_info()
+{
+  if (animals.empty()) {
+    return "None";
+  }
+  std::stringstream ret;
+  for (int i = 0; i < animals.size(); i++) {
+    ret << capitalize( animal_amount_ranking( animals[i].amount ) ) << " " <<
+           Animal_data[ animals[i].type ]->name_plural;
+    if (i < animals.size() - 1) {
+      ret << "," << std::endl;
+    }
+  }
+  return ret.str();
+}
+
 int Map_tile::get_farmability()
 {
   return Terrain_data[ter]->farm_percent;
+}
+
+// prioritize_food defaults to true
+Crop Map_tile::get_best_crop(bool prioritize_food)
+{
+  if (!can_build(AREA_FARM)) {
+    return CROP_NULL;
+  }
+  if (crops.empty()) {
+    return CROP_NULL;
+  }
+// Value of each crop for food and resource
+  std::vector<int> food_value, res_value;
+
+  for (int i = 0; i < crops.size(); i++) {
+    Crop crop = crops[i];
+    Crop_datum* crop_dat = Crop_data[crop];
+    int total_food_value = Resource_data[RES_FOOD]->value;
+    food_value.push_back(crop_dat->food * total_food_value * get_farmability());
+// Find the total value of the resources this crop produces
+    int total_res_value = 0;
+    for (int n = 0; n < crop_dat->bonus_resources.size(); n++) {
+      Resource_amount res_amt = crop_dat->bonus_resources[n];
+      Resource_datum* res_dat = Resource_data[res_amt.type];
+      total_res_value += res_amt.amount * get_farmability() * res_dat->value;
+    }
+    res_value.push_back( total_res_value );
+  }
+
+// Now loop through and find the best one!
+  int best_value = 0,  best_food_value = 0,
+      best_index = -1, best_food_index = -1;
+  for (int i = 0; i < crops.size(); i++) {
+    int this_value = food_value[i] + res_value[i];
+    int this_food_value = food_value[i];
+    if (this_value > best_value) {
+      best_value = this_value;
+      best_index = i;
+    }
+    if (this_food_value > best_food_value) {
+      best_food_value = this_food_value;
+      best_food_index = -1;
+    }
+  }
+
+// If we're prioritizing food, try to use best_food_index first.
+  if (prioritize_food && best_food_index != -1) {
+    return crops[best_food_index];
+  }
+  if (best_index == -1) {
+// No useful crops here!
+    return CROP_NULL;
+  }
+  return crops[best_index];
+}
+
+int Map_tile::get_max_food_output()
+{
+  if (!can_build(AREA_FARM)) {
+    return 0;
+  }
+// First, find our best crop.
+  int best_food = 0;
+  for (int i = 0; i < crops.size(); i++) {
+    Crop crop = crops[i];
+    Crop_datum* crop_dat = Crop_data[crop];
+    if (crop_dat->food > best_food) {
+      best_food = crop_dat->food;
+    }
+  }
+  if (best_food == 0) { // No crops here produce food!
+    return 0;
+  }
+
+  int farmability = get_farmability();
+// We don't divide by 10000 at this point, in order to avoid rounding errors.
+  return (best_food * farmability);
+}
+
+// Here the crop "value" is the 100 - Crop_datum's percentage value.
+int Map_tile::get_resource_crop_output()
+{
+  if (!can_build(AREA_FARM)) {
+    return 0;
+  }
+
+// Go through all crops here, and find the one that produces the most high-value
+// resource.
+  int best_value = 0;
+  for (int i = 0; i < crops.size(); i++) {
+    Crop crop = crops[i];
+    Crop_datum* crop_dat = Crop_data[crop];
+// Find the resource associated with this crop with the highest value
+    int best_res_value = 0;
+    for (int n = 0; n < crop_dat->bonus_resources.size(); n++) {
+      Resource res = crop_dat->bonus_resources[n].type;
+      Resource_datum* res_dat = Resource_data[res];
+      int res_value = crop_dat->bonus_resources[n].amount * res_dat->value;
+      if (res_value > best_res_value) {
+        best_res_value = res_value;
+      }
+    }
+// Now compare the best resource that crop produces with the best we've found so
+// far.
+    if (best_res_value > best_value) {
+      best_value = best_res_value;
+    }
+  }
+
+// Bonus resources ignore farmability, so just return that value.
+  return best_value;
+}
+
+int Map_tile::get_avg_hunting_output()
+{
+  if (!can_build(AREA_HUNTING_CAMP)) {
+    return 0;
+  }
+// Find the sums and divide by the total count
+  int food_sum = 0;
+// Divisor should include terrain's hunting difficulty (chance of no animals)
+  int divisor = get_terrain_datum()->hunting_difficulty;
+  for (int i = 0; i < animals.size(); i++) {
+    Animal_datum* animal_dat = Animal_data[ animals[i].type ];
+    int food = animal_dat->food_killed;
+    int count = animals[i].amount;
+
+// Increase food if the animal appears in packs.
+    if (animal_dat->pack_chance > 0 && animal_dat->max_pack_size > 1) {
+      int pack_size = animal_dat->max_pack_size / 2;
+// Only multiply by pack_size if it represents an increase
+// Add the chance of extra food we have.
+      food += (food * (pack_size - 1) * animal_dat->pack_chance) / 100;
+    }
+
+// Reduce food output if it's dangerous.  TODO: Tweak?
+// This uses danger / 60 as a percentage to lose; e.g. danger 6 => lose 10%
+    if (animal_dat->danger > 0) {
+      food = food - (food * animal_dat->danger) / 60;
+    }
+
+    food_sum += food * count;
+    divisor += count;
+
+  }
+  if (divisor == 0) {
+    return 0;
+  }
+  return (food_sum / divisor);
+}
+
+bool Map_tile::can_build(Area_type area)
+{
+  Terrain_datum* ter_dat = get_terrain_datum();
+  if (!ter_dat) {
+    return false;
+  }
+
+  for (int i = 0; i < ter_dat->buildable_areas.size(); i++) {
+    if (ter_dat->buildable_areas[i] == area) {
+      return true;
+    }
+  }
+  return false;
+}
+
+Mineral_amount* Map_tile::lookup_mineral(Mineral mineral)
+{
+  for (int i = 0; i < minerals.size(); i++) {
+    if (minerals[i].type == mineral) {
+      return &(minerals[i]);
+    }
+  }
+  return NULL;
 }
 
 int Map_tile::get_mineral_amount(Mineral mineral)
@@ -79,6 +348,81 @@ int Map_tile::get_mineral_amount(Mineral mineral)
   for (int i = 0; i < minerals.size(); i++) {
     if (minerals[i].type == mineral) {
       return minerals[i].amount;
+    }
+  }
+  return 0;
+}
+
+bool Map_tile::remove_mineral(Mineral mineral)
+{
+  for (int i = 0; i < minerals.size(); i++) {
+    if (minerals[i].type == mineral) {
+      minerals.erase( minerals.begin() + i );
+      return true;
+    }
+  }
+  return false;
+}
+
+Animal Map_tile::choose_hunt_animal(int skill_level)
+{
+// Figure out the total population, including the difficulty of the terrain
+  int total_pop = get_terrain_datum()->hunting_difficulty;
+  if (total_pop > 0) {
+// Modify the odds of finding nothing using our skill level
+// Triple or double for poor skill; 75% or 60% for good skill.
+    total_pop = (total_pop * 3) / skill_level;
+  }
+  for (int i = 0; i < animals.size(); i++) {
+    total_pop += animals[i].amount;
+  }
+
+  int roll = rng(1, total_pop);
+// Generate a random number, and subtract populations til we hit 0
+  for (int i = 0; i < animals.size(); i++) {
+    roll -= animals[i].amount;
+    if (roll <= 0) {
+      return animals[i].type;
+    }
+  }
+// At this point, if we haven't hit zero it's due to the terrain difficulty.
+// Which means we weren't able to catch anything!
+  return ANIMAL_NULL;
+}
+
+Animal Map_tile::get_best_hunt_animal(int hunter_level)
+{
+  int best_food = 0, best_index = -1, best_difficulty = 999999;
+  for (int i = 0; i < animals.size(); i++) {
+    Animal_datum* ani_dat = Animal_data[ animals[i].type ];
+    if (ani_dat->difficulty == 0) {
+      debugmsg("%s has difficulty 0!", ani_dat->name.c_str());
+    } else {
+      int num_caught = hunter_level / ani_dat->difficulty;
+      int remainder  = hunter_level % ani_dat->difficulty;
+      int food = num_caught * ani_dat->food_killed +
+                 (ani_dat->food_killed * remainder) / ani_dat->difficulty;
+
+// On a tie, choose whichever has lower difficulty.
+      if (food > best_food ||
+          (food == best_food && ani_dat->difficulty < best_difficulty)) {
+        best_food = food;
+        best_difficulty = ani_dat->difficulty;
+        best_index = i;
+      }
+    }
+  }
+  if (best_index == -1) { // No food-producing animals here!
+    return ANIMAL_NULL;
+  }
+  return animals[best_index].type;
+}
+
+int Map_tile::get_animal_population(Animal animal)
+{
+  for (int i = 0; i < animals.size(); i++) {
+    if (animals[i].type == animal) {
+      return animals[i].amount;
     }
   }
   return 0;
@@ -104,8 +448,9 @@ City_map::~City_map()
 }
 
 void City_map::generate(Map_type type,
-                        std::vector<Crop> crops, std::vector<Mineral> minerals,
-                        std::vector<Animal> game,
+                        std::vector<Crop> world_crops,
+                        std::vector<Mineral> world_minerals,
+                        std::vector<Animal> world_animals,
                         Direction coast,
                         Direction_full river_start, Direction_full river_end)
 {
@@ -269,13 +614,16 @@ void City_map::generate(Map_type type,
   }
 
   if (type != MAP_OCEAN && coast != DIR_NULL) {  // Alter chances a bit.
-    chance[TER_TUNDRA]    *= 1.5;
-    chance[TER_FIELD]     *= 1.5;
-    chance[TER_ROCKY]     *=  .8;
-    chance[TER_HILL]      *=  .6;
-    chance[TER_MOUNTAIN]  *=  .2;
-    chance[TER_FOREST]    *= 1.3;
-    chance[TER_SWAMP]     *= 1.2;
+    chance[TER_TUNDRA]        *= 1.5;
+    chance[TER_ICY_HILL]      *=  .7;
+    chance[TER_ICY_MOUNTAIN]  *=  .3;
+    chance[TER_FIELD]         *= 1.5;
+    chance[TER_ROCKY]         *=  .8;
+    chance[TER_HILL]          *=  .6;
+    chance[TER_MOUNTAIN]      *=  .2;
+    chance[TER_FOREST]        *= 1.3;
+    chance[TER_SWAMP]         *= 1.2;
+    chance[TER_JUNGLE]        *= 1.2;
   }
 
   for (int i = 0; i < TER_MAX; i++) {
@@ -501,7 +849,7 @@ void City_map::generate(Map_type type,
  */
       tiles[x][y].crops.clear();
       tiles[x][y].minerals.clear();
-      tiles[x][y].game.clear();
+      tiles[x][y].animals.clear();
       Terrain_datum* ter_dat = Terrain_data[ tiles[x][y].ter ];
 
 // Crops
@@ -509,8 +857,8 @@ void City_map::generate(Map_type type,
 // Check if the world map assigned us this crop.
         Crop crop = ter_dat->crops[i];
         bool crop_assigned = false;
-        for (int n = 0; !crop_assigned && n < crops.size(); n++) {
-          if (crops[n] == crop) {
+        for (int n = 0; !crop_assigned && n < world_crops.size(); n++) {
+          if (world_crops[n] == crop) {
             crop_assigned = true;
           }
         }
@@ -522,7 +870,7 @@ void City_map::generate(Map_type type,
         if (crop_assigned ||
             (rng(1, 100) <= crop_dat->percentage &&
              rng(1, 100) <= crop_dat->percentage &&
-             rng(1, 100) <= crop_dat->percentage   )) {
+             rng(1, 100) <= crop_dat->percentage && one_in(4))) {
           tiles[x][y].crops.push_back(crop);
         }
       }
@@ -533,8 +881,8 @@ void City_map::generate(Map_type type,
         Mineral mineral = min_amount.type;
 // Check if the world map assigned us this mineral.
         bool mineral_assigned = false;
-        for (int n = 0; !mineral_assigned && n < minerals.size(); n++) {
-          if (minerals[n] == mineral) {
+        for (int n = 0; !mineral_assigned && n < world_minerals.size(); n++) {
+          if (world_minerals[n] == mineral) {
             mineral_assigned = true;
           }
         }
@@ -548,35 +896,107 @@ void City_map::generate(Map_type type,
           tiles[x][y].minerals.push_back( min_amount );
         } else if (mineral_assigned) {
           tiles[x][y].minerals.push_back( min_amount.randomize() );
-        } else if (rng(1, 150) <= mineral_dat->percentage) {
+        } else if (rng(1, 150) <= mineral_dat->percentage && one_in(2)) {
           tiles[x][y].minerals.push_back( min_amount.make_small() );
         }
       }
 
-// Game
-      for (int i = 0; i < ter_dat->game.size(); i++) {
-// Check if the world map assigned us this crop.
-        Animal animal = ter_dat->game[i];
+// Animals
+      for (int i = 0; i < ter_dat->animals.size(); i++) {
+        Animal_amount ani_amount = ter_dat->animals[i];
+        Animal animal = ani_amount.type;
+// Check if the world map assigned us this animal.
         bool animal_assigned = false;
-        for (int n = 0; !animal_assigned && n < game.size(); n++) {
-          if (game[n] == animal) {
+        for (int n = 0; !animal_assigned && n < world_animals.size(); n++) {
+          if (world_animals[n] == animal) {
             animal_assigned = true;
           }
         }
-// Only assign the animal if we got it from the world map, or on a small chance
         Animal_datum* animal_dat = Animal_data[animal];
         if (!animal_dat) {
           debugmsg("NULL animal_dat (animal %d)", animal);
         }
-        if (animal_assigned ||
-            (rng(1, 100) <= animal_dat->percentage &&
-             rng(1, 100) <= animal_dat->percentage   )) {
-          tiles[x][y].game.push_back(animal);
+/* Some terrains have an infinite amount of a animal; always copy it over.
+ * This is copied from minerals above; should we NOT do this?  It doesn't seem
+ * likely to ever occur.
+ */
+        if (ani_amount.is_infinite()) {
+          tiles[x][y].animals.push_back( ani_amount );
+        } else if (animal_assigned) {
+          tiles[x][y].animals.push_back( ani_amount.randomize() );
+        } else if (rng(1, 1000) <= animal_dat->percentage) {
+          tiles[x][y].animals.push_back( ani_amount.make_small() );
         }
       }
 
     }
   }
+}
+
+std::string City_map::save_data()
+{
+  std::stringstream ret;
+
+  for (int x = 0; x < CITY_MAP_SIZE; x++) {
+    for (int y = 0; y < CITY_MAP_SIZE; y++) {
+      ret << tiles[x][y].save_data() << " ";
+    }
+  }
+  ret << std::endl;
+
+  ret << bonus_crops.size() << " ";
+  for (int i = 0; i < bonus_crops.size(); i++) {
+    ret << int(bonus_crops[i]) << " ";
+  }
+  ret << std::endl;
+
+  ret << bonus_minerals.size() << " ";
+  for (int i = 0; i < bonus_minerals.size(); i++) {
+    ret << int(bonus_minerals[i]) << " ";
+  }
+  ret << std::endl;
+
+  return ret.str();
+}
+
+bool City_map::load_data(std::istream& data)
+{
+  for (int x = 0; x < CITY_MAP_SIZE; x++) {
+    for (int y = 0; y < CITY_MAP_SIZE; y++) {
+      if (!tiles[x][y].load_data(data)) {
+        debugmsg("City_map failed to load tile [%d:%d].", x, y);
+        return false;
+      }
+    }
+  }
+
+  int num_crops;
+  data >> num_crops;
+  for (int i = 0; i < num_crops; i++) {
+    int tmpcrop;
+    data >> tmpcrop;
+    if (tmpcrop <= 0 || tmpcrop >= CROP_MAX) {
+      debugmsg("City_map loaded crop %d (range is 1 to %d.",
+               tmpcrop, CROP_MAX - 1);
+      return false;
+    }
+    bonus_crops.push_back( Crop(tmpcrop) );
+  }
+
+  int num_minerals;
+  data >> num_minerals;
+  for (int i = 0; i < num_minerals; i++) {
+    int tmpmineral;
+    data >> tmpmineral;
+    if (tmpmineral <= 0 || tmpmineral >= MINERAL_MAX) {
+      debugmsg("City_map loaded mineral %d (range is 1 to %d.",
+               tmpmineral, MINERAL_MAX - 1);
+      return false;
+    }
+    bonus_minerals.push_back( Mineral(tmpmineral) );
+  }
+
+  return true;
 }
 
 Map_tile* City_map::get_tile(Point p)
@@ -680,3 +1100,4 @@ bool City_map::is_oob(int x, int y)
 {
   return (x < 0 || x >= CITY_MAP_SIZE || y < 0 || y >= CITY_MAP_SIZE);
 }
+

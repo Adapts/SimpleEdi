@@ -1,13 +1,16 @@
 #ifndef _MAP_H_
 #define _MAP_H_
 
+#include "map_type.h" // For enum Map_type
 #include "geometry.h" // For direction
 #include "glyph.h"    // For terrain glyph
 #include "resource.h" // Crops and minerals
 #include "area.h"
 #include "animal.h"
+#include "ai.h"       // For City_role
 #include <vector>
 #include <string>
+#include <istream>    // For data loading
 
 // How big the city map is to a side.
 #define CITY_MAP_SIZE 9
@@ -59,13 +62,20 @@ struct Terrain_datum
   glyph symbol;
 
   int farm_percent;
+// This value is treated as a "null animal" when hunting; we pick what animal we
+// hunt by random choice, each animal weighted by its population.  So if there
+// are 10 hares, 6 foxes, and this value is 4, there's a 10-in-20 chance of
+// hunting a hare, 6-in-20 of a fox, and 4-in-20 of nothing.
+// Reasonable value range is 100 to 1000.  Use higher values for terrain that's
+// easy to hide in (e.g. forest)
+  int hunting_difficulty;
   int wood_min, wood_max;
 
   Terrain_type wood_cleared_type; // What to become when wood is cleared out.
 
   std::vector<Crop> crops;
   std::vector<Mineral_amount> minerals;
-  std::vector<Animal> game;
+  std::vector<Animal_amount> animals;
 
   std::vector<Area_type> buildable_areas;
 };
@@ -74,42 +84,12 @@ struct Terrain_datum
 extern Terrain_datum* Terrain_data[TER_MAX];
 void init_terrain_data();
 
-// Map_type defines what your City_map looks like.  It's also used as the basic
-// tile for World_map.
-enum Map_type
-{
-  MAP_NULL = 0,
-
-  MAP_TUNDRA,       // Mostly tundra, some forest
-
-  MAP_DESERT,       // Mostly desert
-  MAP_WASTELAND,    // Mostly rocky and hills
-  MAP_PLAINS,       // Mostly field and rocky
-  MAP_FOREST,       // Mostly forest and plains
-  MAP_SWAMP,        // Mostly swamp
-  MAP_JUNGLE,       // Jungle, forest and swamp.
-
-  MAP_FOOTHILLS,    // Mostly hills and mountains
-  MAP_ICY_FOOTHILLS,// Frozen hills and mountains
-  MAP_MOUNTAINOUS,  // Almost all mountains
-  MAP_ICY_MOUNTAIN, // The most forbidding of all terrains!
-
-  MAP_BASIN,        // River, then fields and swamp
-  MAP_CANYON,       // River, then mountains and hills
-  MAP_GLACIER,      // Frozen river
-
-  MAP_COASTAL,      // Ocean along one side
-  MAP_OCEAN,        // Almost all ocean, occasional island
-  MAP_ICECAP,       // Frozen ocean
-
-  MAP_MAX
-};
-
 struct Map_type_datum
 {
   Map_type_datum()
   {
-    name = "NULL"; is_water = false; is_river = false;
+    name = "NULL"; is_water = false; is_river = false; road_cost = -1;
+    travel_cost = -1;
     symbol = glyph('x', c_red, c_ltgray);
   }
 
@@ -117,6 +97,10 @@ struct Map_type_datum
   bool is_water;
   bool is_river;
   glyph symbol;
+  int road_cost;    // The difficulty of building a road
+  int travel_cost;  // The cost, in movement points, of traveling; most units
+                    // get 100 movement points per day.
+  std::vector<City_role> city_roles;
 
 };
 
@@ -129,15 +113,34 @@ struct Map_tile
   Map_tile();
   ~Map_tile();
 
+  std::string save_data();
+  bool load_data(std::istream& data);
+
   Terrain_datum* get_terrain_datum();
   std::string    get_terrain_name();
   glyph          get_glyph();
   std::string    get_info();
   std::string    get_crop_info();
+  std::string    get_animals_info();
 
   int get_farmability();
+  Crop get_best_crop(bool prioritize_food = true); // Pick the best crop
+  int get_max_food_output();  // Pick the best crop and multiply by farmability
+// Find the crop that produces the highest-value resource
+  int get_resource_crop_output();
+  int get_avg_hunting_output(); // Averages food values of animals
 
+  bool can_build(Area_type area);
+
+  Mineral_amount* lookup_mineral(Mineral mineral);
   int get_mineral_amount(Mineral mineral);
+  bool remove_mineral(Mineral mineral); // Returns false if we didn't have it
+
+// Randomly chooses an animal, weighted by population; may return ANIMAL_NULL
+  Animal choose_hunt_animal(int skill_level);
+// Returns the animal that gives the most food (given a building's hunter_level)
+  Animal get_best_hunt_animal(int hunter_level);
+  int get_animal_population(Animal animal);
 
   void clear_wood();  // Become whatever we become when wood is cleared out.
 
@@ -145,7 +148,7 @@ struct Map_tile
   int wood;
   std::vector<Crop>           crops;
   std::vector<Mineral_amount> minerals;
-  std::vector<Animal>         game;
+  std::vector<Animal_amount>  animals;
 };
 
 class City_map
@@ -160,11 +163,15 @@ public:
  * tiles, and they should appear in smaller amounts.
  */
   void generate(Map_type type,
-                std::vector<Crop> crops, std::vector<Mineral> minerals,
-                std::vector<Animal> game,
+                std::vector<Crop> world_crops,
+                std::vector<Mineral> world_minerals,
+                std::vector<Animal> world_animals,
                 Direction coast = DIR_NULL,
                 Direction_full river_start = DIRFULL_NULL,
-                Direction_full river_end = DIRFULL_NULL);
+                Direction_full river_end   = DIRFULL_NULL);
+
+  std::string save_data();
+  bool load_data(std::istream& data);
 
   Map_tile* get_tile(Point p);
   Map_tile* get_tile(int x, int y);

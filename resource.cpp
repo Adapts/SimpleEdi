@@ -38,40 +38,38 @@ Resource lookup_resource(std::string name)
   name = no_caps( trim( name ) );
   for (int i = 0; i < RES_MAX; i++) {
     Resource ret = Resource(i);
-    if (name == resource_name(ret)) {
+    if (name == no_caps( Resource_data[ret]->name )) {
       return ret;
     }
   }
   return RES_NULL;
 }
 
-std::string resource_name(Resource res)
+Luxury_type lookup_luxury_type(std::string name)
 {
-  switch (res) {
-
-    case RES_NULL:          return "NULL";
-
-    case RES_GOLD:          return "gold";
-    case RES_FOOD:          return "food";
-    case RES_WOOD:          return "wood";
-    case RES_STONE:         return "stone";
-
-    case RES_FIBER:         return "fibers";
-    case RES_FUR:           return "fur";
-    case RES_LEATHER:       return "leather";
-
-    case RES_UNICORN_HORN:  return "unicorn horn";
-
-    case RES_FARMING:       return "farming";
-    case RES_MINING:        return "mining";
-    case RES_HUNTING:       return "hunting";
-    case RES_LOGGING:       return "logging";
-
-    case RES_MAX:           return "BUG - RES_MAX";
-    default:                return "BUG - Unnamed Resource";
-
+  name = no_caps( trim( name ) );
+  for (int i = 0; i < LUX_MAX; i++) {
+    Luxury_type ret = Luxury_type(i);
+    if (no_caps( luxury_type_name(ret) ) == name) {
+      return ret;
+    }
   }
-  return "BUG - Escaped resource_name() switch.";
+  return LUX_NULL;
+}
+
+std::string luxury_type_name(Luxury_type type)
+{
+  switch (type) {
+    case LUX_NULL:          return "NULL";
+    case LUX_SPICE:         return "spice";
+    case LUX_SMOKABLE:      return "smokable";
+    case LUX_HALLUCINOGEN:  return "hallucinogen";
+    case LUX_COATS:         return "warm coats";
+    case LUX_HOUSEWARES:    return "housewares";
+    case LUX_MAX:           return "BUG - LUX_MAX";
+    default:                return "BUG - Unnamed Luxury_type";
+  }
+  return "BUG - Escaped luxury_type_name() switch!";
 }
 
 Crop_type lookup_crop_type(std::string name)
@@ -94,7 +92,7 @@ std::string crop_type_name(Crop_type type)
     case CROPTYPE_SPICE:    return "spice";
     case CROPTYPE_DRUG:     return "drug";
     case CROPTYPE_POISON:   return "poison";
-    case CROPTYPE_MATERIAL: return "material";
+    case CROPTYPE_FIBER:    return "fiber";
     case CROPTYPE_OTHER:    return "other";
     case CROPTYPE_MAX:      return "BUG - CROPTYPE_MAX";
     default:                return "Unnamed Crop_type";
@@ -110,7 +108,7 @@ nc_color crop_type_color(Crop_type type)
     case CROPTYPE_SPICE:    return c_yellow;
     case CROPTYPE_DRUG:     return c_magenta;
     case CROPTYPE_POISON:   return c_ltred;
-    case CROPTYPE_MATERIAL: return c_ltblue;
+    case CROPTYPE_FIBER:    return c_ltblue;
     case CROPTYPE_OTHER:    return c_brown;
     case CROPTYPE_MAX:      return c_ltgray;
     default:                return c_ltgray;
@@ -175,22 +173,22 @@ std::string trees_amount_ranking(int wood)
   if (wood == 0) {
     return "no";
   }
-  if (wood < 15) {
+  if (wood < 40) {
     return "one or two";
   }
-  if (wood < 50) {
+  if (wood < 100) {
     return "very few";
   }
-  if (wood < 100) {
+  if (wood < 300) {
     return "few";
   }
   if (wood < 1000) {
     return "many";
   }
-  if (wood < 3000) {
+  if (wood < 10000) {
     return "dense";
   }
-  if (wood < 5000) {
+  if (wood < 30000) {
     return "very dense";
   }
   return "overgrown with";

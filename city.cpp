@@ -1,94 +1,170 @@
 #include "city.h"
-
-Citizens::Citizens()
-{
-  count         = 0;
-  employed      = 0;
-  wealth        = 0;
-  tax_morale    = 0;
-  morale_points = 0;
-  starvation    = 0;
-}
-
-Citizens::~Citizens()
-{
-}
-
-int Citizens::get_unemployed()
-{
-  if (employed >= count) {
-    return 0;
-  }
-  return count - employed;
-}
-
-int Citizens::get_income()
-{
-// Obviously, don't include income from government jobs (i.e. areas/buildings)
-  int ret = 0;
-
-// Idle citizens do produce income though!
-  int idle = get_unemployed();
-  ret += (idle * citizen_idle_income(type)) / 100;
-
-// TODO: Other sources of income?
-
-  return ret;
-}
-
-int Citizens::get_morale_percentage()
-{
-  if (count == 0) {
-    return 0;
-  }
-  return tax_morale + (100 * morale_points) / count;
-}
-
-int Citizens::get_starvation_chance()
-{
-  if (count == 0) {
-    return 0;
-  }
-  return starvation / count;
-}
-
-void Citizens::add_citizens(int amount)
-{
-  if (amount <= 0) {
-    return;
-  }
-  count += amount;
-  morale_points += 50 * amount; // Each one comes into the world with 50% morale
-}
-
-void Citizens::remove_citizens(int amount)
-{
-  if (amount <= 0) {
-    return;
-  }
-// get_morale_percentage() basically returns the morale points per citizen.
-// When we remove citizens, we need to remove their morale points too.
-  morale_points -= amount * get_morale_percentage();
-// Ditto starvation.
-  starvation    -= amount * get_starvation_chance();
-  count -= amount;
-  if (count < 0) {
-    morale_points = 0;
-    count = 0;
-  }
-}
+#include "rng.h"
+#include "world.h"
+#include "globals.h"
+#include <sstream>
 
 City::City()
 {
+  uid = -1;
   type = CITY_TYPE_CITY;
   race = RACE_NULL;
   for (int i = 0; i < CIT_MAX; i++) {
     population[i].type = Citizen_type(i);
   }
+  for (int i = 0; i < RES_MAX; i++) {
+    resources[i] = 0;
+    resource_price[i] = Resource_data[i]->value;
+  }
+  for (int i = 0; i < MINERAL_MAX; i++) {
+    minerals[i] = 0;
+    mineral_price[i] = Mineral_data[i]->value;
+  }
 }
 
 City::~City()
 {
+}
+
+void City::clear_data()
+{
+  uid = -1;
+  name = "";
+  type = CITY_TYPE_CITY;
+  race = RACE_NULL;
+  location = Point(-1, -1);
+  for (int i = 0; i < CIT_MAX; i++) {
+    population[i].type = Citizen_type(i);
+  }
+  for (int i = 0; i < RES_MAX; i++) {
+    resources[i] = 0;
+  }
+  for (int i = 0; i < MINERAL_MAX; i++) {
+    minerals[i] = 0;
+  }
+  livestock.clear();
+  trade_routes.clear();
+// TODO: Clear the map?
+}
+
+std::string City::save_data()
+{
+  std::stringstream ret;
+  ret << uid << " ";
+// Since some names are multiple words, we need the ! to mark the end.
+  ret << name << " ! ";
+  ret << int(type) << " " << int(race) << std::endl;
+  ret << location.x << " " << location.y << std::endl;
+  ret << map.save_data() << std::endl;
+  ret << trade_routes.size() << std::endl;
+  for (std::map<int,Trade_route>::iterator it = trade_routes.begin();
+       it != trade_routes.end();
+       it++) {
+    ret << it->first << " " << it->second.save_data() << std::endl;
+  }
+
+  for (int i = 0; i < CIT_MAX; i++) {
+    ret << population[i].save_data() << std::endl;
+  }
+  for (int i = 0; i < RES_MAX; i++) {
+    ret << resources[i] << " ";
+  }
+  ret << std::endl;
+  for (int i = 0; i < MINERAL_MAX; i++) {
+    ret << minerals[i] << " ";
+  }
+  ret << std::endl;
+  ret << livestock.size() << " ";
+  for (std::map<Animal,int>::iterator it = livestock.begin();
+       it != livestock.end();
+       it++) {
+    ret << int(it->first) << " " << it->second << " ";
+  }
+  ret << std::endl;
+  return ret.str();
+}
+
+bool City::load_data(std::istream& data)
+{
+  clear_data();
+
+  data >> uid;
+  std::string tmpstr;
+  while (tmpstr != "!") {
+    data >> tmpstr;
+    if (tmpstr != "!") {
+      if (!name.empty()) {
+        name = name + " ";
+      }
+      name = name + tmpstr;
+    }
+  }
+  int tmptype, tmprace;
+  data >> tmptype >> tmprace;
+  if (tmptype >= CITY_TYPE_MAX || tmptype <= 0) {
+    debugmsg("City '%s' has type value of %d (range is 1 - %d)!",
+             name.c_str(), tmptype, CITY_TYPE_MAX - 1);
+    return false;
+  }
+  if (tmprace >= RACE_MAX || tmptype <= 0) {
+    debugmsg("City '%s' has race value of %d (range is 1 - %d)!",
+             name.c_str(), tmprace, RACE_MAX - 1);
+    return false;
+  }
+  type = City_type(tmptype);
+  race = Race(tmprace);
+
+  data >> location.x >> location.y;
+
+  if (!map.load_data(data)) {
+    debugmsg("City '%s' failed to load map.", name.c_str());
+    return false;
+  }
+
+  int num_routes;
+  data >> num_routes;
+  for (int i = 0; i < num_routes; i++) {
+    int tmpuid;
+    Trade_route tmproute;
+    data >> tmpuid;
+    if (!tmproute.load_data(data)) {
+      debugmsg("City '%s' failed to load trade route to City %d.",
+               name.c_str(), tmpuid);
+      return false;
+    }
+    trade_routes[tmpuid] = tmproute;
+  }
+
+  for (int i = 0; i < CIT_MAX; i++) {
+    if (!population[i].load_data(data)) {
+      debugmsg("City '%s' failed to load %s data.",
+               name.c_str(), citizen_type_name(Citizen_type(i), true).c_str());
+      return false;
+    }
+  }
+
+  for (int i = 0; i < RES_MAX; i++) {
+    data >> resources[i];
+  }
+
+  for (int i = 0; i < MINERAL_MAX; i++) {
+    data >> minerals[i];
+  }
+
+  int num_animals;
+  data >> num_animals;
+  for (int i = 0; i < num_animals; i++) {
+    int tmpanimal, tmpnum;
+    data >> tmpanimal >> tmpnum;
+    if (tmpanimal <= 0 || tmpanimal >= ANIMAL_MAX) {
+      debugmsg("City '%s' had animal of index %d (Range is 1 to %d)",
+               name.c_str(), tmpanimal, ANIMAL_MAX - 1);
+      return false;
+    }
+    livestock[ Animal(tmpanimal) ] = tmpnum;
+  }
+
+  return true;
 }
 
 void City::start_new_city()
@@ -111,6 +187,26 @@ void City::start_new_city()
 // We always start with the maximum amount of food, regardless of our race.
   resources[RES_FOOD]  = get_food_cap();
 
+}
+
+// loc defaults to (-1, -1)
+void City::generate_map(Point loc)
+{
+  if (loc.x >= 0 && loc.x < WORLD_MAP_SIZE &&
+      loc.y >= 0 && loc.y < WORLD_MAP_SIZE   ) {
+    location = loc;
+  }
+
+  std::vector<Crop>    crops    = GAME->world->crops_at   (location);
+  std::vector<Mineral> minerals = GAME->world->minerals_at(location);
+  std::vector<Animal>  animals  = GAME->world->animals_at (location);
+
+  map.generate( GAME->world->get_map_type(location),
+                crops, minerals, animals,
+                GAME->world->coast_from(location),
+                GAME->world->river_start_for(location),
+                GAME->world->river_end_for(location)
+              );
 }
 
 void City::do_turn()
@@ -136,6 +232,47 @@ void City::set_race(Race new_race)
 void City::set_city_type(City_type new_type)
 {
   type = new_type;
+}
+
+// range defaults to 100, progress_bar defaults to true
+void City::setup_trade_routes(int range, bool progress_bar)
+{
+  trade_routes.clear();
+
+  for (int i = 0; i < GAME->world->city_list.size(); i++) {
+    int percent = (100 * i) / GAME->world->city_list.size();
+    if (progress_bar) {
+      popup_nowait("Establishing trade routes... [%d%%%%%%%%]", percent);
+    }
+    City* target = GAME->world->city_list[i];
+// Don't consider cities that are more than <range> tiles away.
+    if (target != this && manhattan_dist(location, target->location) <= range) {
+      int dist = GAME->world->get_trade_distance(race, location,
+                                                 target->location);
+      int overhd = dist + 5;
+      if (target->race != race) {
+        Race_datum* our_race_dat = Race_data[race];
+        Race_datum* their_race_dat = Race_data[target->race];
+        int our_relation = our_race_dat->relations[target->race];
+        int their_relation = their_race_dat->relations[race];
+// Positive relations have a smaller/no impact on this penalty.
+        if (our_relation > 0) {
+          our_relation /= 2;
+        }
+        if (their_relation > 0) {
+          their_relation /= 2;
+        }
+        int penalty = 11 - our_relation - their_relation;
+// If our races like each other, there might be no penalty!
+        if (penalty > 10) {
+          overhd = (overhd * penalty) / 10;
+        }
+      }
+      if (dist >= 0 && dist <= 5000) { // 50 days' travel
+        trade_routes[target->uid] = Trade_route(target->location, dist, overhd);
+      }
+    }
+  }
 }
 
 int City::get_total_population(Citizen_type type)
@@ -220,6 +357,112 @@ Race City::get_race()
   return race;
 }
 
+std::vector<Trade_route> City::find_sellers_of(Resource res)
+{
+  std::vector<Trade_route> ret;
+  for (std::map<int,Trade_route>::iterator it = trade_routes.begin();
+       it != trade_routes.end();
+       it++) {
+    City* seller = GAME->world->lookup_city_uid(it->first);
+    if (seller) {
+      int avail = seller->get_net_resource_production(res);
+      if (avail > 0) {
+// Insert into our return vector, sorted by distance.
+// TODO: Sort by unit price (including overhead)!
+        int dist = it->second.distance;
+        bool found = false;
+        for (int i = 0; !found && i < ret.size(); i++) {
+          if (dist <= ret[i].distance) {
+            found = true;
+            ret.insert( ret.begin() + i, it->second );
+          }
+        }
+        if (!found) {
+          ret.push_back(it->second);
+        }
+      } // if (avail > 0)
+    } // if (seller)
+  } // for (std::map<int,Trade_route>::iterator it = trade_routes.begin(); ... )
+  return ret;
+}
+
+std::vector<Trade_route> City::find_buyers_for(Resource res)
+{
+  std::vector<Trade_route> ret;
+  for (std::map<int,Trade_route>::iterator it = trade_routes.begin();
+       it != trade_routes.end();
+       it++) {
+    City* buyer = GAME->world->lookup_city_uid(it->first);
+    if (buyer && buyer->get_daily_demand(res) > 0) {
+      ret.push_back(it->second);
+    }
+  }
+  return ret;
+}
+
+int City::get_price(Resource res)
+{
+  return resource_price[res];
+}
+
+int City::get_price(Mineral min)
+{
+  return mineral_price[min];
+}
+
+void City::set_all_prices()
+{
+}
+
+// get_daily_demand() (both versions) are overridden for AI_city and Player_city
+// and as such, the City version just returns 0 (it's not used).
+int City::get_daily_demand(Resource res)
+{
+  return 0;
+}
+
+int City::get_daily_demand(Mineral min)
+{
+  return 0;
+}
+
+std::map<Resource,int> City::get_luxuries(Luxury_type type)
+{
+  std::map<Resource,int> ret;
+
+  for (int i = 0; i < RES_MAX; i++) {
+    if (resources[i] > 1 && Resource_data[i]->luxury_type == type) {
+      ret[ Resource(i) ] = resources[i];
+    }
+  }
+
+  return ret;
+}
+
+// Since generic City doesn't have any Areas or Buildings or imports, we don't
+// actually produce resources.  Overloaded for Player_city and AI_city.
+int City::get_gross_resource_production(Resource res)
+{
+  return 0;
+}
+
+int City::get_resource_consumption(Resource res)
+{
+  int ret = 0;
+  for (int i = CIT_PEASANT; i <= CIT_BURGHER; i++) {
+    ret += population[i].consumption[res];
+    if (res == RES_FOOD) {  // Special case
+      ret += get_food_consumption( Citizen_type(i) );
+    }
+  }
+  return ret;
+}
+
+int City::get_net_resource_production(Resource res)
+{
+  return get_gross_resource_production(res) - get_resource_consumption(res);
+}
+
 int City::get_resource_amount(Resource res)
 {
   return resources[res];
@@ -257,6 +500,7 @@ int City::get_food_consumption(Citizen_type type)
   return ret;
 }
 
+// amount defaults to 1
 bool City::has_resource(Resource res, int amount)
 {
   return (get_resource_amount(res) >= amount);
@@ -289,6 +533,7 @@ bool City::has_resources(std::map<Resource,int> res_used)
   return true;
 }
 
+// amount defaults to 1
 bool City::has_mineral(Mineral res, int amount)
 {
   return (get_mineral_amount(res) >= amount);
@@ -432,6 +677,32 @@ void City::gain_resources(std::map<Resource,int> res_used)
        it != res_used.end();
        it++) {
     gain_resource( it->first, it->second );
+  }
+}
+
+void City::gain_mineral(Mineral min, int amount)
+{
+  minerals[min] += amount;
+}
+
+void City::gain_mineral(Mineral_amount min)
+{
+  gain_mineral(min.type, min.amount);
+}
+
+void City::gain_minerals(std::vector<Mineral_amount> min_used)
+{
+  for (int i = 0; i < min_used.size(); i++) {
+    gain_mineral( min_used[i] );
+  }
+}
+
+void City::gain_minerals(std::map<Mineral,int> min_used)
+{
+  for (std::map<Mineral,int>::iterator it = min_used.begin();
+       it != min_used.end();
+       it++) {
+    gain_mineral( it->first, it->second );
   }
 }
 

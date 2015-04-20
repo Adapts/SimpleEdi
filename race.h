@@ -1,11 +1,14 @@
 #ifndef _RACE_H_
 #define _RACE_H_
 
-#include "citizen.h"  // Some race values are Citizen_type-dependent.
-#include "color.h"
-#include "map.h"      // For Map_type
+#include "citizen.h"    // Some race values are Citizen_type-dependent.
+#include "color.h"      // Race_datum stores the race's color.
+#include "map_type.h"   // For Map_type
+#include "city_type.h"  // We track population size for each City_type.
 #include <string>
 #include <map>
+
+enum Map_type;
 
 enum Race
 {
@@ -22,15 +25,18 @@ enum Race
   RACE_OGRE,
   RACE_TROLL,
   RACE_HALFLING,
-/*
   RACE_GNOME,
+
+// Rare/obscure fantasy races
+  RACE_MINOTAUR,
+  RACE_RAKSHASA,
+  RACE_NAGA,
+/*
+  RACE_LIZARDMAN,
   RACE_KOBOLD,
 
 // Rare/obscure/highly specialized fantasy races
-  RACE_NAGA,
   RACE_CENTAUR,
-  RACE_MINOTAUR,
-  RACE_LIZARDMAN,
   RACE_GNOLL,
 
 // Advanced/strange fantasy races
@@ -38,9 +44,8 @@ enum Race
   RACE_ARACHNID,  // Spider people
   RACE_GOLEM,
   RACE_GARGOYLE,
-  RACE_RAKSHASA,
-  RACE_DRACONIAN,
   RACE_DENDROID,  // Tree people
+  RACE_DRACONIAN,
   RACE_FELID,     // Cat people
   RACE_SPRIGGAN,  // Fairy-like creature
 */
@@ -54,8 +59,26 @@ enum Race_skill
 
 // Area-related skills
   SKILL_FARMING,
+  SKILL_HUNTING,
+  SKILL_LIVESTOCK,
   SKILL_MINING,
   SKILL_FORESTRY, // Includes logging
+
+// Other in-city skills
+  SKILL_CONSTRUCTION,
+
+// Intercity skills
+  SKILL_TRADE,
+  SKILL_ESPIONAGE,
+
+// Magic skills
+  SKILL_MAGIC,
+  SKILL_EARTH_MAGIC,
+  SKILL_WATER_MAGIC,
+  SKILL_AIR_MAGIC,
+  SKILL_FIRE_MAGIC,
+  SKILL_LIFE_MAGIC,
+  SKILL_DEATH_MAGIC,
 
   SKILL_MAX
 };
@@ -73,10 +96,13 @@ struct Race_datum
   void add_city_names(std::string pos, ...);
   std::string get_city_name();
 
+  std::string generate_help_text();
+
   int uid;  // Probably don't need it, but why not
   std::string name;
   std::string plural_name;
   std::string adjective;  // "Buying ____ weapons.", e.g. "orcish"
+  std::string description;
 
   nc_color color;
   std::vector<nc_color> kingdom_colors; // Acceptable colors for kingdoms
@@ -85,14 +111,23 @@ struct Race_datum
 
 // Used for placement; how much we want to live near various map types.
   std::map<Map_type,int> map_type_value;
+// Used for travel; the travel cost of entering various terrains.
+// Only use when we want to override the default (see map_type_data.cpp).
+  std::map<Map_type,int> map_type_travel_cost;
 // To name a city of this race, we string together a start, middle, and end.
   std::vector<std::string> city_name_start, city_name_middle, city_name_end;
 // How many cities will be clustered around a duchy seat?
   int cluster_min, cluster_max;
+// How big are our cities?  Min/max for each type (city, ducy, capital)
+  int city_size_min[CITY_TYPE_MAX], city_size_max[CITY_TYPE_MAX];
 
 // GENERAL RACE VALUES
 
+  int base_combat;      // Applies to fighting & hunting
+  int hp;               // hp for combat; default is 100
   int food_consumption; // Default is 100
+  int warlikeness;      // Range is -3 to 3; default/norm is -2
+  int life_value;       // Range is 1 to 5; default is 3
 
 
 // GAME START VALUES
@@ -116,7 +151,10 @@ struct Race_datum
   int low_tax_rate[CIT_MAX];  // Tax rates at/below this give a morale boost.
   int high_tax_rate[CIT_MAX]; // Tax rates at/above this give a big morale minus
 
+// DIPLOMACY STUFF
 
+// relations is our default opinion of a city belonging to this race
+  int relations[RACE_MAX];
 
 // SKILLS ETC
 

@@ -49,7 +49,7 @@ struct Point
   Point(const Point &p) : x (p.x), y (p.y) {}
   ~Point(){}
 
-  std::string str();
+  std::string str() const;
 
   bool operator==(const Point &other) const
   {
@@ -208,6 +208,7 @@ int rl_dist       (Tripoint origin, Tripoint target);
 // sqrt(dX^2 + dY^2)
 int trig_dist     (int x0, int y0, int x1, int y1);
 int trig_dist     (Point origin, Point target);
+// dX + dY
 int manhattan_dist(int x0, int y0, int x1, int y1);
 int manhattan_dist(Point origin, Point target);
 int manhattan_dist(int x0, int y0, int z0, int x1, int y1, int z1);

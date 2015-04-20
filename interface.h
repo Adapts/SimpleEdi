@@ -5,6 +5,7 @@
 #include "window.h"
 #include "area.h"
 #include "game.h"
+#include "world.h"
 #include <vector>
 #include <string>
 
@@ -14,6 +15,8 @@ enum Menu_id
   MENU_GAME,
   MENU_MINISTERS,
   MENU_BUILDINGS,
+  MENU_WORLD,
+  MENU_HELP,
   MENU_MAX
 };
 
@@ -24,6 +27,19 @@ enum Interface_mode
   IMODE_VIEW_MAP,
   IMODE_MAX
 };
+
+// What to put in text_data?
+enum Data_mode
+{
+  DATA_MODE_NULL = 0,     // Don't put any minatoka9@hotmail.com
+  DATA_MODE_CITIZENS,     // Population, employment, etc for citizens
+  DATA_MODE_RESOURCES,    // Quantity of all resources & minerals
+  DATA_MODE_MESSAGES,     // City's messages
+  DATA_MODE_MAX
+};
+
+Data_mode lookup_data_mode(std::string name);
+std::string data_mode_name(Data_mode mode);
 
 enum Game_state
 {
@@ -56,7 +72,10 @@ public:
   Interface();
   ~Interface();
 
-  bool init(Game* G, Player_city* C);
+  bool init();
+
+// returns false if we quit - this should exit the program
+  bool starting_screen();
 
   void main_loop();
 
@@ -72,6 +91,14 @@ private:
 
 // Set the current mode
   void set_mode(Interface_mode mode);
+// Set the data mode; also calls print_data().
+  void set_data_mode(Data_mode mode);
+// Calls set_data_mode()
+  void shift_data_mode(int offset); // offset generally is -1 or 1
+// Print how many messages are waiting to be viewed
+  void print_message_alert();
+// Print the data according to our data mode
+  void print_data();
 
 
 // *** Menus ***
@@ -99,6 +126,9 @@ private:
 // Attempt to add current_area to the city's build queue
   void enqueue_area();
 
+// Lists all .sav files in SAVE_DIR/cities and allows the player to pick one;
+// GAME->load_game() is then called.  Returns false if we cancel.
+  bool load_game();
 
 // *** Special screens ***
 
@@ -108,6 +138,10 @@ private:
   void minister_food();
   // Helper functions for minister_food()
   void list_farm_crops(Area* cur_farm, cuss::interface& i_food);
+// Hunt minister, view hunt history and decide what action to take for animals
+  void minister_hunt();
+// Livestock minister, view kept animals and slaughter them
+  void minister_livestock();
 // Mine minister, define what minerals to mine and view stats
   void minister_mining();
   // Helper function for minister_mining()
@@ -115,8 +149,15 @@ private:
                           cuss::interface& i_mining);
 // Happiness minister, view morale information and do things to alter it
   void minister_morale();
+// Related; control of luxuries going to various citizens
+  void luxury_management();
+// Lists active trades and allows the player to set up new ones
+  void minister_trade();
 // Info on buildings; allows player to hire workers.
   void building_status();
+  // Sets up the help box depending on circumstances
+  void set_building_status_help(cuss::interface& i_buildings,
+                                bool adjusting_production);
 // Pick a recipe for a building to build
 // We stick the data in new_recipe; if we cancel, return false, otherwise true
   bool pick_recipe(Building* cur_bldg, Recipe_amount& new_recipe);
@@ -135,6 +176,14 @@ private:
   Area_type pick_area();
   // Helper functions for pick_area();
   void set_area_list(Area_category category, std::vector<Area_type>& types);
+
+// Shows all help categories and articles
+  void help_index();
+// Allows you to search the help
+  void help_search();
+// Shows a single article; allows linking to others, etc
+// Returns false if we quit help, true if we just went back
+  bool help_article(std::string name);
 
 
 // *** Helper / data-storing functions ***
@@ -161,20 +210,20 @@ private:
   int next_menu_posx;
 
 // Current mode.
+  Player_city* pl_city; // Shorthand for GAME->city
   Game_state game_state; // e.g. "quit"
   Interface_mode cur_mode;
+  Data_mode cur_data_mode;
+  int message_offset;  // We can scroll messages; the first message to start w/
   Menu_id cur_menu;
-
-// Pointers to game data.
-  Game* game;
-  Player_city* city;
 
 // Varius values used in user interaction.
   Point sel;  // Point in map currently highlighted
   bool city_radius; // If true, gray out map tiles outside of radius of control
   bool show_terrain;// If true, don't draw areas - just the terrain
   Area_type current_area; // Current area to be built
-  std::string original_info_text; // Original text of text_info, to be restored
+  bool temp_text; // Is there temporary text in text_map_info?
+  std::string original_info_text; // Orig. text of text_map_info, to be restored
 
 // Windows and cuss interfaces.
   cuss::interface i_main;

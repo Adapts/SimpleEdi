@@ -6,6 +6,8 @@
 #include "race.h"
 #include "world.h"
 #include <vector>
+#include <string>
+#include <istream>
 
 // This is the radius around a city which we lay claim to.
 #define KINGDOM_CLAIM_RADIUS 8
@@ -18,11 +20,24 @@ public:
   Kingdom();
   ~Kingdom();
 
+  void set_game(Game* g);
+
+  std::string save_data();
+  bool load_data(std::istream& data);
+
 // Building the kingdom
-  bool place_capital (World_map* world, int radius = KINGDOM_CLAIM_RADIUS);
-  bool place_new_city(World_map* world, int& expansion_points);
+// called once for each kingdom; it places its capital, the epicenter of the
+// territory.
+  bool place_capital     (World_map* world, int radius = KINGDOM_CLAIM_RADIUS);
+// Places a duchy city and claims territory around it.  Decreases
+// expansion_points.
+  bool place_duchy_seat  (World_map* world, int& expansion_points);
+// Places several minor cities around a duchy seat.  They appear within <radius>
+// tiles of the duchy seat.
   void place_minor_cities(World_map* world, int radius = KINGDOM_CLAIM_RADIUS);
+  void build_road(World_map* world, City* start, City* end);
   void expand_boundaries(World_map* world);
+  void setup_trade_routes(int base_percent);  // param is for progress bar
 
 // Data
   int uid;
@@ -33,6 +48,9 @@ public:
   std::vector<City*> dukes;
   std::vector<City*> cities;
 
+// Kingdom boundaries
+  int most_west, most_north, most_east, most_south;
+
 private:
   Point pick_best_point(World_map* world, std::vector<Point> points_to_try,
                         int radius = KINGDOM_CLAIM_RADIUS);
@@ -40,14 +58,13 @@ private:
                 int radius = KINGDOM_CLAIM_RADIUS);
   void claim_territory(World_map* world, Point p);
 
-  std::vector<Point> city_locations;
+// Data
+  Game* game;
 
-// Kingdom boundaries
-  int most_west, most_north, most_east, most_south;
+  std::vector<Point> city_locations;
 };
 
 // See kingdom.cpp
-extern std::vector<Kingdom*> Kingdoms;
-void init_kingdoms(World_map* world);
+void init_kingdoms(Game* game, World_map* world);
 
 #endif

@@ -3,116 +3,8 @@
 #include "window.h" // For debugmsg()
 #include "geometry.h" // For rl_dist()
 #include "ai_city.h"
+#include "globals.h"
 #include <sstream>
-
-std::vector<Kingdom*> Kingdoms;
-
-void init_kingdoms(World_map* world)
-{
-  if (!world) {
-    debugmsg("init_kingdoms() called with NULL world!");
-    return;
-  }
-
-  bool color_free[c_null];  // c_null is the last color
-  for (int i = 0; i < c_null; i++) {
-    color_free[i] = true;
-  }
-// One kingdom for each race.  Start at 1 to skip RACE_NULL.
-  for (int i = 1; i < RACE_MAX; i++) {
-    popup_nowait("Initializing Kingdoms (%d of %d)...", i, RACE_MAX - 1);
-
-    Kingdom* kingdom = new Kingdom;
-    kingdom->uid = i - 1;
-    kingdom->race = Race(i);
-    Race_datum* race_dat = Race_data[i];
-// Pick a color - try the official race color first
-    if (race_dat->color < c_dkgray && color_free[ race_dat->color ]) {
-      kingdom->color = race_dat->color;
-      color_free[ race_dat->color ] = false;
-
-    } else {
-      std::vector<nc_color> colors = race_dat->kingdom_colors;
-// Remove any already-used colors
-      for (int i = 0; i < colors.size(); i++) {
-        if (!color_free[ colors[i] ]) {
-          colors.erase(colors.begin() + i);
-          i--;
-        }
-      }
-      if (colors.empty()) { // Can't use official colors; use a random one
-        std::vector<nc_color> free_colors;
-// Start at 1 to skip c_black; stop at c_dkgray to skip bright colors
-        for (int i = 1; i < c_dkgray; i++) {
-          if (color_free[i]) {
-            free_colors.push_back( nc_color(i) );
-          }
-        }
-        if (free_colors.empty()) {  // 8 kingdoms used already!
-          kingdom->color = nc_color( rng(1, c_dkgray - 1) );
-        } else {
-          int index = rng(0, free_colors.size() - 1);
-          kingdom->color = free_colors[index];
-          color_free[ free_colors[index] ] = false;
-        }
-      } else {  // We can use an official color!
-        int index = rng(0, colors.size() - 1);
-        kingdom->color = colors[index];
-        color_free[ colors[index] ] = false;
-      }
-    } // if (!color_free[race_dat->color])
-
-// Place the kingdom.
-    if (kingdom->place_capital(world)) {
-      Kingdoms.push_back( kingdom );  // ...and add to our list.
-    }
-  } // for (int i = 1; i < RACE_MAX; i++)
-
-/* Now, expand the kingdoms by placing duchy seats.  To keep things fair, each
- * kingdom gets to place a single city/duchy at a time.  We go through our list,
- * each kingdom taking a turn, until all kingdoms are out of points.
- */
-  std::vector<int> points, kingdom_index;
-  for (int i = 0; i < Kingdoms.size(); i++) {
-    points.push_back( KINGDOM_EXPANSION_POINTS ); // Defined in kingdom.h
-    kingdom_index.push_back( i );
-  }
-
-  int iteration = 0, max_points = points.size() * KINGDOM_EXPANSION_POINTS;
-  while (!kingdom_index.empty()) {
-    iteration++;
-    int total_points = 0;
-    for (int i = 0; i < points.size(); i++) {
-      total_points += points[i];
-    }
-    int percent = (100 * (max_points - total_points)) / max_points;
-    popup_nowait("Placing duchies... [%d%%%%%%%%]", percent);
-    for (int i = 0; i < kingdom_index.size(); i++) {
-      Kingdom* kingdom = Kingdoms[ kingdom_index[i] ];
-      if (!kingdom->place_new_city(world, points[i])) {
-        kingdom_index.erase( kingdom_index.begin() + i );
-        points.erase( points.begin() + i );
-      }
-    }
-  }
-
-// Now each kingdom gets to place minor cities in its duchies.
-  for (int i = 0; i < Kingdoms.size(); i++) {
-    int percent = (100 * (i + 1)) / Kingdoms.size();
-    popup_nowait("Placing minor cities... [%d%%%%%%%%]", percent);
-    Kingdoms[i]->place_minor_cities(world);
-  }
-
-// Finally, swell the territory claimed by each kingdom.
-  int expansions = 3;
-  for (int n = 0; n < expansions; n++) {
-    for (int i = 0; i < Kingdoms.size(); i++) {
-      popup_nowait("Expanding territories... (%d/%d; %d/%d)",
-                   n + 1, expansions, i + 1, Kingdoms.size());
-      Kingdoms[i]->expand_boundaries(world);
-    }
-  }
-}
 
 Kingdom::Kingdom()
 {
@@ -139,6 +31,112 @@ Kingdom::~Kingdom()
   }
 }
 
+void Kingdom::set_game(Game* g)
+{
+  game = g;
+}
+
+std::string Kingdom::save_data()
+{
+  std::stringstream ret;
+
+  ret << uid << " ";
+  ret << int(race) << " ";
+  ret << int(color) << " ";
+  ret << most_west << " ";
+  ret << most_north << " ";
+  ret << most_east << " ";
+  ret << most_south << " ";
+
+  ret << std::endl;
+  ret << dukes.size() << " " << cities.size() << std::endl;
+
+  ret << capital->save_data() << std::endl;
+
+  for (int i = 0; i < dukes.size(); i++) {
+    ret << dukes[i]->save_data() << std::endl;
+  }
+
+  for (int i = 0; i < cities.size(); i++) {
+    ret << cities[i]->save_data() << std::endl;
+  }
+
+  return ret.str();
+}
+
+bool Kingdom::load_data(std::istream& data)
+{
+  data >> uid;
+  int tmprace;
+  data >> tmprace;
+  if (tmprace <= 0 || tmprace >= RACE_MAX) {
+    debugmsg("Kingdom %d loaded race %d (range is 1 to %d).",
+             uid, tmprace, RACE_MAX - 1);
+    return false;
+  }
+  race = Race(tmprace);
+
+  int tmpcol;
+  data >> tmpcol;
+  if (tmpcol <= 0 || tmpcol >= c_null) {
+    debugmsg("Kingdom %d loaded color %d (range is 1 to %d).",
+             uid, tmpcol, c_null - 1);
+    return false;
+  }
+  color = nc_color(tmpcol);
+
+  data >> most_west >> most_north >> most_east >> most_south;
+
+  int num_dukes, num_cities;
+  data >> num_dukes >> num_cities;
+
+  if (capital) {
+    delete capital;
+  }
+  capital = new AI_city;
+
+  if (!capital->load_data(data)) {
+    debugmsg("Kingdom %d failed to load capital.", uid);
+    return false;
+  }
+
+  if (!dukes.empty()) {
+    for (int i = 0; i < dukes.size(); i++) {
+      delete (dukes[i]);
+    }
+    dukes.clear();
+  }
+
+  for (int i = 0; i < num_dukes; i++) {
+    City* tmpcity = new AI_city;
+    if (!tmpcity->load_data(data)) {
+      debugmsg("Kingdom %d failed to load duke %d/%d.", uid, i, num_dukes);
+      return false;
+    }
+    dukes.push_back(tmpcity);
+    city_locations.push_back(tmpcity->location);
+  }
+
+  if (!cities.empty()) {
+    for (int i = 0; i < cities.size(); i++) {
+      delete (cities[i]);
+    }
+    cities.clear();
+  }
+
+  for (int i = 0; i < num_cities; i++) {
+    City* tmpcity = new AI_city;
+    if (!tmpcity->load_data(data)) {
+      debugmsg("Kingdom %d failed to load city %d/%d.", uid, i, num_cities);
+      return false;
+    }
+    cities.push_back(tmpcity);
+    city_locations.push_back(tmpcity->location);
+  }
+
+  return true;
+}
+
 // size defaults to KINGDOM_CLAIM_RADIUS (see kingdom.h)
 bool Kingdom::place_capital(World_map* world, int radius)
 {
@@ -163,10 +161,10 @@ bool Kingdom::place_capital(World_map* world, int radius)
   return true;
 }
 
-bool Kingdom::place_new_city(World_map* world, int& expansion_points)
+bool Kingdom::place_duchy_seat(World_map* world, int& expansion_points)
 {
   if (!world) {
-    debugmsg("Kingdom::place_new_city() called with NULL world!");
+    debugmsg("Kingdom::place_duchy_seat() called with NULL world!");
     return false;
   }
   if (expansion_points <= 0) {
@@ -212,11 +210,8 @@ bool Kingdom::place_new_city(World_map* world, int& expansion_points)
 // Pay the cost.
   expansion_points -= lowest_cost;
 
-// Is this a duchy seat?
-  City_type type = CITY_TYPE_DUCHY;
-
 // Place the city.
-  add_city(world, loc, type, KINGDOM_CLAIM_RADIUS);
+  add_city(world, loc, CITY_TYPE_DUCHY, KINGDOM_CLAIM_RADIUS);
   return true;
 }
 
@@ -229,13 +224,20 @@ void Kingdom::place_minor_cities(World_map* world, int radius)
   //ss_debug << race_dat->cluster_min << "<=>" << race_dat->cluster_max <<
               //std::endl;
 // Copy city_locations since it'll change during this function.
+// city_locations stores the Points of all cities in this kingdom - at this
+// point, the capital and duchy seats.
   std::vector<Point> tmp_city_locations = city_locations;
 // tmp_city-locations contains the locations of all duchy seats; for each one,
 // place several "minor" (regular) cities.
   for (int i = 0; i < tmp_city_locations.size(); i++) {
     int percent = (100 * (i + 1)) / tmp_city_locations.size();
     popup_nowait("Placing minor cities [%d%%%%%%%%]", percent);
-    Point parent_city = tmp_city_locations[i];
+    Point parent_pos = tmp_city_locations[i];
+    City* parent_city = world->get_city(parent_pos);
+    if (!parent_city) {
+      debugmsg("Couldn't find parent city!");
+      return;
+    }
 // Use our race to determine how many to place.
     std::vector<Point> new_city_locations;
     int num_cities = rng(race_dat->cluster_min, race_dat->cluster_max);
@@ -244,13 +246,13 @@ void Kingdom::place_minor_cities(World_map* world, int radius)
     std::vector<Point> possible_locations;
     std::vector<int>   scores;
 
-    for (int x = parent_city.x - radius; x <= parent_city.x + radius; x++) {
-      for (int y = parent_city.y - radius; y <= parent_city.y + radius; y++) {
+    for (int x = parent_pos.x - radius; x <= parent_pos.x + radius; x++) {
+      for (int y = parent_pos.y - radius; y <= parent_pos.y + radius; y++) {
 // Only use this point if it's in our kingdom and not adjacent to the parent.
         int kingdom_id = world->get_kingdom_id(x, y);
         if (x >= 0 && x < WORLD_MAP_SIZE && y >= 0 && y < WORLD_MAP_SIZE &&
             (kingdom_id == uid || kingdom_id == -1) &&
-            rl_dist(parent_city, Point(x, y)) > 1) {
+            rl_dist(parent_pos, Point(x, y)) > 1) {
 // Figure out the score of the location, and insert it into our list in the
 // proper position to sort the list by score.
 // Randomize score a little bit so it's not always the same terrain.
@@ -332,11 +334,36 @@ void Kingdom::place_minor_cities(World_map* world, int radius)
 
     for (int n = 0; n < new_city_locations.size(); n++) {
       add_city(world, new_city_locations[n], CITY_TYPE_CITY, radius / 2);
+      City* newest_city = cities.back();
+      int pop = newest_city->get_total_population();
+      int min = Race_data[race]->city_size_min[CITY_TYPE_CITY];
+      int max = 1.5 * Race_data[race]->city_size_max[CITY_TYPE_CITY];
+      if (rng(min, max) <= 2 * pop) {
+        build_road(world, parent_city, cities.back());
+      }
     }
 
   } // for (int i = 0; i < tmp_city_locations.size(); i++)
 
   //debugmsg( ss_debug.str().c_str() );
+}
+
+void Kingdom::build_road(World_map* world, City* start, City* end)
+{
+  if (!world) {
+    debugmsg("Kingdom::build_road() called with NULL World_map.");
+    return;
+  } else if (!start || !end) {
+    debugmsg("Kingdom::build_road() called with at least one NULL city.");
+    return;
+  }
+
+  world->build_road(start->location, end->location);
+
+/*
+  start->add_road_connection(end);
+  end->add_road_connection(start);
+*/
 }
 
 Point Kingdom::pick_best_point(World_map* world,
@@ -409,6 +436,10 @@ Point Kingdom::pick_best_point(World_map* world,
 
 void Kingdom::add_city(World_map* world, Point loc, City_type type, int radius)
 {
+  if (!world) {
+    debugmsg("Kingdom::add_city() called with NULL world!");
+    return;
+  }
   Race_datum* race_dat = Race_data[race];
 // Mark the world map as claimed!
   for (int x = loc.x - radius; x <= loc.x + radius; x++) {
@@ -428,9 +459,12 @@ void Kingdom::add_city(World_map* world, Point loc, City_type type, int radius)
 
 // Now actually add our city.
   AI_city* city = new AI_city;
+  city->uid = game->get_city_uid();
   city->set_city_type(type);
   city->set_race(race);
   city->set_random_name();
+  city->generate_map(loc);  // This sets city->location too
+  city->randomize_properties(world);
 
   switch (type) {
     case CITY_TYPE_CAPITAL:
@@ -518,5 +552,32 @@ void Kingdom::expand_boundaries(World_map* world)
 
   for (int i = 0; i < points_to_claim.size(); i++) {
     claim_territory(world, points_to_claim[i]);
+  }
+}
+
+void Kingdom::setup_trade_routes(int base_percent)
+{
+  int total_cities = 1 + dukes.size() + cities.size();
+  int percent = 100 / total_cities;
+  popup_nowait("Setting trade routes... [%d%%%%%%%%] / [%d%%%%%%%%]",
+               percent, base_percent);
+  capital->setup_trade_routes(40, false);
+  capital->set_all_prices();
+
+  for (int i = 0; i < dukes.size(); i++) {
+    percent = (100 * (i + 1)) / total_cities;
+    popup_nowait("Setting trade routes... [%d%%%%%%%%] / [%d%%%%%%%%]",
+                 percent, base_percent);
+    dukes[i]->setup_trade_routes(40, false);
+    dukes[i]->set_all_prices();
+  }
+
+  for (int i = 0; i < cities.size(); i++) {
+    int city_num = i + 1 + dukes.size();
+    percent = (100 * city_num) / total_cities;
+    popup_nowait("Setting trade routes... [%d%%%%%%%%] / [%d%%%%%%%%]",
+                 percent, base_percent);
+    cities[i]->setup_trade_routes(40, false);
+    cities[i]->set_all_prices();
   }
 }
